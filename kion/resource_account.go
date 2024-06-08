@@ -13,12 +13,6 @@ import (
 	hc "github.com/kionsoftware/terraform-provider-kion/kion/internal/kionclient"
 )
 
-// Shared methods used by kion_*_account resources.
-// See one of:
-//   kion/resource_aws_account.go
-//   kion/resource_gcp_account.go
-//   kion/resource_azure_subscription_account.go
-
 func resourceAccountRead(resource string, ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
 	var diags diag.Diagnostics
 	client := m.(*hc.Client)
@@ -52,13 +46,16 @@ func resourceAccountRead(resource string, ctx context.Context, d *schema.Resourc
 
 	return diags
 }
+
 func determineAccountLocation(ID string, d *schema.ResourceData) (string, bool) {
-	if strings.HasPrefix(ID, "account_id=") {
+	switch {
+	case strings.HasPrefix(ID, "account_id="):
 		return ProjectLocation, true
-	} else if strings.HasPrefix(ID, "account_cache_id=") {
+	case strings.HasPrefix(ID, "account_cache_id="):
 		return CacheLocation, true
+	default:
+		return getKionAccountLocation(d), false
 	}
-	return getKionAccountLocation(d), false
 }
 
 func fetchAccountData(client *hc.Client, accountLocation, ID string) (hc.MappableResponse, *diag.Diagnostic) {
@@ -70,10 +67,10 @@ func fetchAccountData(client *hc.Client, accountLocation, ID string) (hc.Mappabl
 		accountUrl = fmt.Sprintf("/v3/account-cache/%s", ID)
 		resp = new(hc.AccountCacheResponse)
 	case ProjectLocation:
-		fallthrough
-	default:
 		accountUrl = fmt.Sprintf("/v3/account/%s", ID)
 		resp = new(hc.AccountResponse)
+	default:
+		return nil, hc.CreateDiagError("Invalid account location", fmt.Errorf("unknown account location: %s", accountLocation), ID)
 	}
 
 	if err := client.GET(accountUrl, resp); err != nil {
@@ -116,32 +113,8 @@ func resourceAccountUpdate(ctx context.Context, d *schema.ResourceData, m interf
 	client := m.(*hc.Client)
 	ID := d.Id()
 
-	var hasChanged bool
-
 	oldProjectId, newProjectId := getProjectIdChanges(d)
-
-	switch {
-	case oldProjectId == 0 && newProjectId != 0:
-		if err := handleCacheToProjectConversion(d, client, ID, newProjectId); err != nil {
-			return append(diags, *err)
-		}
-		hasChanged = true
-
-	case oldProjectId != 0 && newProjectId == 0:
-		if err := handleProjectToCacheConversion(d, client, ID); err != nil {
-			return append(diags, *err)
-		}
-		hasChanged = true
-
-	default:
-		accountLocation := getKionAccountLocation(d)
-		if accountLocation == ProjectLocation && oldProjectId != newProjectId {
-			if err := moveAccountToDifferentProject(d, client, ID); err != nil {
-				return append(diags, *err)
-			}
-			hasChanged = true
-		}
-	}
+	hasChanged := handleProjectChanges(d, client, ID, oldProjectId, newProjectId)
 
 	if hasResourceChanges(d, "email", "name", "include_linked_account_spend", "linked_role", "skip_access_checking", "start_datecode", "use_org_account_info") {
 		if err := updateAccount(d, client, ID); err != nil {
@@ -159,12 +132,11 @@ func resourceAccountUpdate(ctx context.Context, d *schema.ResourceData, m interf
 
 	if hasChanged {
 		if err := d.Set("last_updated", time.Now().Format(time.RFC850)); err != nil {
-			diags = append(diags, diag.Diagnostic{
+			return append(diags, diag.Diagnostic{
 				Severity: diag.Error,
 				Summary:  "Unable to set last_updated",
 				Detail:   fmt.Sprintf("Error: %v", err),
 			})
-			return diags
 		}
 		tflog.Info(ctx, fmt.Sprintf("Updated account ID: %s", ID))
 	}
@@ -175,6 +147,24 @@ func resourceAccountUpdate(ctx context.Context, d *schema.ResourceData, m interf
 func getProjectIdChanges(d *schema.ResourceData) (int, int) {
 	oldId, newId := d.GetChange("project_id")
 	return oldId.(int), newId.(int)
+}
+
+func handleProjectChanges(d *schema.ResourceData, client *hc.Client, ID string, oldProjectId, newProjectId int) bool {
+	switch {
+	case oldProjectId == 0 && newProjectId != 0:
+		if err := handleCacheToProjectConversion(d, client, ID, newProjectId); err != nil {
+			return true
+		}
+	case oldProjectId != 0 && newProjectId == 0:
+		if err := handleProjectToCacheConversion(d, client, ID); err != nil {
+			return true
+		}
+	case oldProjectId != newProjectId:
+		if err := moveAccountToDifferentProject(d, client, ID); err != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func handleCacheToProjectConversion(d *schema.ResourceData, client *hc.Client, ID string, newProjectId int) *diag.Diagnostic {
@@ -255,35 +245,24 @@ func hasResourceChanges(d *schema.ResourceData, keys ...string) bool {
 
 func updateAccount(d *schema.ResourceData, client *hc.Client, ID string) *diag.Diagnostic {
 	accountLocation := getKionAccountLocation(d)
-	var req interface{}
-	var accountUrl string
-
-	switch accountLocation {
-	case CacheLocation:
-		accountUrl = fmt.Sprintf("/v3/account-cache/%s", ID)
-		req = createCacheAccountUpdateRequest(d)
-	default:
-		accountUrl = fmt.Sprintf("/v3/account/%s", ID)
-		req = createProjectAccountUpdateRequest(d)
-	}
-
+	accountUrl := fmt.Sprintf("/v3/account/%s", ID)
+	req := createAccountUpdateRequest(d, accountLocation)
 	if err := client.PATCH(accountUrl, req); err != nil {
 		return hc.CreateDiagError("Unable to update account", err, ID)
 	}
 	return nil
 }
 
-func createCacheAccountUpdateRequest(d *schema.ResourceData) hc.AccountCacheUpdatable {
-	return hc.AccountCacheUpdatable{
-		Name:                      d.Get("name").(string),
-		AccountEmail:              d.Get("email").(string),
-		LinkedRole:                d.Get("linked_role").(string),
-		IncludeLinkedAccountSpend: hc.OptionalBool(d, "include_linked_account_spend"),
-		SkipAccessChecking:        hc.OptionalBool(d, "skip_access_checking"),
+func createAccountUpdateRequest(d *schema.ResourceData, accountLocation string) interface{} {
+	if accountLocation == CacheLocation {
+		return hc.AccountCacheUpdatable{
+			Name:                      d.Get("name").(string),
+			AccountEmail:              d.Get("email").(string),
+			LinkedRole:                d.Get("linked_role").(string),
+			IncludeLinkedAccountSpend: hc.OptionalBool(d, "include_linked_account_spend"),
+			SkipAccessChecking:        hc.OptionalBool(d, "skip_access_checking"),
+		}
 	}
-}
-
-func createProjectAccountUpdateRequest(d *schema.ResourceData) hc.AccountUpdatable {
 	return hc.AccountUpdatable{
 		Name:                      d.Get("name").(string),
 		AccountEmail:              d.Get("email").(string),
@@ -304,7 +283,6 @@ func updateAccountLabels(d *schema.ResourceData, client *hc.Client, ID string) *
 }
 
 func resourceAccountDelete(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	// Acknowledge the context parameter to avoid linter errors
 	_ = ctx
 
 	var diags diag.Diagnostics
@@ -312,15 +290,9 @@ func resourceAccountDelete(ctx context.Context, d *schema.ResourceData, m interf
 	ID := d.Id()
 
 	accountLocation := getKionAccountLocation(d)
-
-	var accountUrl string
-	switch accountLocation {
-	case CacheLocation:
+	accountUrl := fmt.Sprintf("/v3/account/%s", ID)
+	if accountLocation == CacheLocation {
 		accountUrl = fmt.Sprintf("/v3/account-cache/%s", ID)
-	case ProjectLocation:
-		fallthrough
-	default:
-		accountUrl = fmt.Sprintf("/v3/account/%s", ID)
 	}
 
 	err := client.DELETE(accountUrl, nil)
@@ -334,39 +306,26 @@ func resourceAccountDelete(ctx context.Context, d *schema.ResourceData, m interf
 	}
 
 	d.SetId("")
-
 	return diags
 }
 
 func convertCacheAccountToProjectAccount(client *hc.Client, accountCacheId, newProjectId int, startDatecode string) (int, error) {
-
-	// The API is inconsistent and convert expects YYYYMM while other methods expect YYYY-MM
 	startDatecode = strings.ReplaceAll(startDatecode, "-", "")
-
-	resp, err := client.POST(fmt.Sprintf("/v3/account-cache/%d/convert/%d?start_datecode=%s",
-		accountCacheId, newProjectId, startDatecode), nil)
-
+	resp, err := client.POST(fmt.Sprintf("/v3/account-cache/%d/convert/%d?start_datecode=%s", accountCacheId, newProjectId, startDatecode), nil)
 	if err != nil {
 		return 0, err
 	}
-
 	return resp.RecordID, nil
 }
 
 func convertProjectAccountToCacheAccount(client *hc.Client, accountId int) (int, error) {
 	respRevert := new(hc.AccountRevertResponse)
 	err := client.DeleteWithResponse(fmt.Sprintf("/v3/account/revert/%d", accountId), nil, respRevert)
-
 	if err != nil {
 		return 0, err
 	}
-
 	return respRevert.RecordID, nil
 }
-
-//
-// Methods for determining whether we are placing the acount in a project or the account cache
-//
 
 const (
 	CacheLocation   = "cache"
@@ -377,14 +336,12 @@ func getKionAccountLocation(d *schema.ResourceData) string {
 	if v, exists := d.GetOk("location"); exists {
 		return v.(string)
 	}
-
 	if _, exists := d.GetOk("project_id"); exists {
 		return ProjectLocation
 	}
 	return CacheLocation
 }
 
-// Show the account location computed attribute in the diff
 func customDiffComputedAccountLocation(ctx context.Context, d *schema.ResourceDiff, m interface{}) error {
 	var diags diag.Diagnostics
 
