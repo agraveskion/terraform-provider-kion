@@ -3,6 +3,7 @@ package kionclient
 import (
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -486,4 +487,12 @@ func TestAccOUGenerateDataSourceDeclarationAll(dataSourceName, localName string)
 func PrintHCLConfig(config string) {
 	fmt.Println("Generated HCL configuration:")
 	fmt.Println(config)
+}
+
+func CreateDiagError(summary string, err error, item interface{}) *diag.Diagnostic {
+	return &diag.Diagnostic{
+		Severity: diag.Error,
+		Summary:  summary,
+		Detail:   fmt.Sprintf("Error: %v\nItem: %v", err, item),
+	}
 }
