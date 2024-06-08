@@ -18,6 +18,17 @@ func resourceAccountRead(resource string, ctx context.Context, d *schema.Resourc
 	client := m.(*hc.Client)
 	ID := d.Id()
 
+	// HACK: Special case when importing existing accounts
+	// When importing accounts we only have an ID and we don't know whether the
+	// ID is an account ID or account_cache ID. To work around this, we allow the
+	// user to import using an `account_id=` or `account_cache_id=` prefix.
+	// For example:
+	//   terraform import kion_aws_account.test-account account_id=123
+	//   terraform import kion_aws_account.test-account account_cache_id=321
+	//
+	// TODO: Find a better way to determine if the imported ID is an account
+	// or account cache by reading the resource value
+
 	tflog.Debug(ctx, "Reading account information", map[string]interface{}{"resource": resource, "ID": ID})
 
 	accountLocation, locationChanged := determineAccountLocation(ID, d)
