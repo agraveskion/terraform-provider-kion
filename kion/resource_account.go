@@ -308,11 +308,11 @@ func resourceAccountDelete(ctx context.Context, d *schema.ResourceData, m interf
 
 	err := client.DELETE(accountUrl, nil)
 	if err != nil {
-		diags = append(diags, diag.Diagnostic{
-			Severity: diag.Error,
-			Summary:  "Unable to delete account",
-			Detail:   fmt.Sprintf("Error: %v\nItem: %v", err.Error(), ID),
-		})
+		diags = append(diags, *hc.CreateDiagError(
+			"Unable to delete account",
+			err,
+			ID,
+		))
 		return diags
 	}
 
@@ -358,19 +358,19 @@ func customDiffComputedAccountLocation(ctx context.Context, d *schema.ResourceDi
 
 	if _, exists := d.GetOk("project_id"); exists {
 		if err := d.SetNew("location", ProjectLocation); err != nil {
-			diags = append(diags, diag.Diagnostic{
-				Severity: diag.Error,
-				Summary:  "Unable to set new computed location for project",
-				Detail:   fmt.Sprintf("Error setting new computed location to ProjectLocation: %v", err),
-			})
+			diags = append(diags, *hc.CreateDiagError(
+				"Unable to set new computed location for project",
+				err,
+				"ProjectLocation",
+			))
 		}
 	} else {
 		if err := d.SetNew("location", CacheLocation); err != nil {
-			diags = append(diags, diag.Diagnostic{
-				Severity: diag.Error,
-				Summary:  "Unable to set new computed location for cache",
-				Detail:   fmt.Sprintf("Error setting new computed location to CacheLocation: %v", err),
-			})
+			diags = append(diags, *hc.CreateDiagError(
+				"Unable to set new computed location for cache",
+				err,
+				"CacheLocation",
+			))
 		}
 	}
 

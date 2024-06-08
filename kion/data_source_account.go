@@ -2,7 +2,6 @@ package kion
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -124,11 +123,11 @@ func dataSourceAccountRead(ctx context.Context, d *schema.ResourceData, m interf
 	resp := new(hc.AccountListResponse)
 	err := client.GET("/v3/account", resp)
 	if err != nil {
-		diags = append(diags, diag.Diagnostic{
-			Severity: diag.Error,
-			Summary:  "Unable to read Account",
-			Detail:   fmt.Sprintf("Error: %v\nItem: %v", err.Error(), "all"),
-		})
+		diags = append(diags, *hc.CreateDiagError(
+			"Unable to read Account",
+			err,
+			"all",
+		))
 		return diags
 	}
 
@@ -136,31 +135,32 @@ func dataSourceAccountRead(ctx context.Context, d *schema.ResourceData, m interf
 
 	arr := make([]map[string]interface{}, 0)
 	for _, item := range resp.Data {
-		data := make(map[string]interface{})
-		data["created_at"] = item.CreatedAt
-		data["id"] = item.ID
-		data["name"] = item.Name
-		data["account_number"] = item.AccountNumber
-		data["email"] = item.Email
-		data["linked_role"] = item.LinkedRole
-		data["project_id"] = item.ProjectID
-		data["account_type_id"] = item.AccountTypeID
-		data["payer_id"] = item.PayerID
-		data["start_datecode"] = item.StartDatecode
-		data["skip_access_checking"] = item.SkipAccessChecking
-		data["use_org_account_info"] = item.UseOrgAccountInfo
-		data["linked_account_number"] = item.LinkedAccountNumber
-		data["include_linked_account_spend"] = item.IncludeLinkedAccountSpend
-		data["car_external_id"] = item.CARExternalID
-		data["service_external_id"] = item.ServiceExternalID
+		data := map[string]interface{}{
+			"created_at":                   item.CreatedAt,
+			"id":                           item.ID,
+			"name":                         item.Name,
+			"account_number":               item.AccountNumber,
+			"email":                        item.Email,
+			"linked_role":                  item.LinkedRole,
+			"project_id":                   item.ProjectID,
+			"account_type_id":              item.AccountTypeID,
+			"payer_id":                     item.PayerID,
+			"start_datecode":               item.StartDatecode,
+			"skip_access_checking":         item.SkipAccessChecking,
+			"use_org_account_info":         item.UseOrgAccountInfo,
+			"linked_account_number":        item.LinkedAccountNumber,
+			"include_linked_account_spend": item.IncludeLinkedAccountSpend,
+			"car_external_id":              item.CARExternalID,
+			"service_external_id":          item.ServiceExternalID,
+		}
 
 		match, err := f.Match(data)
 		if err != nil {
-			diags = append(diags, diag.Diagnostic{
-				Severity: diag.Error,
-				Summary:  "Unable to filter Account",
-				Detail:   fmt.Sprintf("Error: %v\nItem: %v", err.Error(), "filter"),
-			})
+			diags = append(diags, *hc.CreateDiagError(
+				"Unable to filter Account",
+				err,
+				"filter",
+			))
 			return diags
 		} else if !match {
 			continue
@@ -170,11 +170,11 @@ func dataSourceAccountRead(ctx context.Context, d *schema.ResourceData, m interf
 	}
 
 	if err := d.Set("list", arr); err != nil {
-		diags = append(diags, diag.Diagnostic{
-			Severity: diag.Error,
-			Summary:  "Unable to read Account",
-			Detail:   fmt.Sprintf("Error: %v\nItem: %v", err.Error(), "all"),
-		})
+		diags = append(diags, *hc.CreateDiagError(
+			"Unable to read Account",
+			err,
+			"all",
+		))
 		return diags
 	}
 
